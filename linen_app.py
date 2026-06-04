@@ -4,26 +4,26 @@ from streamlit_gsheets import GSheetsConnection
 import qrcode
 import io
 
-# 1. YOUR LIVE GOOGLE SHEET LINK
+# 1. LIVE MASTER GOOGLE SHEET LINK
 MASTER_SHEET_LINK = "https://docs.google.com/spreadsheets/d/1NTjdd-xwsI1klW6twk13gIKhOwpR0YnYgkl6Zf8rO9s/edit?gid=0#gid=0"
 
 def load_cloud_data():
     try:
-        # Streamlit official engine connection
+        # Securely connect to your Google Sheet database
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(spreadsheet=MASTER_SHEET_LINK, ttl="10s")
+        df = conn.read(spreadsheet=MASTER_SHEET_LINK, ttl="1s") # Low TTL forces real-time updates
         
-        # Format names to match your spreadsheet casing perfectly
+        # Standardize column headers: lowercase and remove leading/trailing spaces
         df.columns = df.columns.str.strip().str.lower()
         return df
     except Exception as e:
         st.sidebar.error(f"⚠️ Cloud sync paused. Error: {e}")
-        # Safe fallback block mapping your exact sheet structures
+        # Universal emergency fallback table structure
         fallback_data = {
             'id': [1], 'day': ['Thursday'], 'date': ['04/06/2026'], 'shift': ['AM'],
             'linen type': ['Pillow'], 'opening balance': [40], 
-            'received from laundry': [4], 'sent to laundry': [5], 
-            'in use': [30], 'damaged': [0], 'lost': [0], 
+            'received from laundry': [0], 'sent to laundry': [0], 
+            'in use': [0], 'damaged': [0], 'lost': [0], 
             'closing balance': [40], 'checked by': ['RK'], 'witness': ['RP'], 'remarks': ['1 Still in Laundry']
         }
         return pd.DataFrame(fallback_data)
@@ -33,30 +33,35 @@ st.set_page_config(page_title="Epha Linen Tracker", layout="wide", page_icon="�
 st.title("🧺 Epha Linen Tracker")
 st.caption("Live Dashboard connected directly to your Google Sheet.")
 
+# Fetch the columns and rows
 df = load_cloud_data()
-
-# Automated verification check to completely block KeyErrors
-expected_cols = ['id', 'linen type', 'opening balance', 'in use', 'sent to laundry', 'received from laundry']
-for col in expected_cols:
-    if col not in df.columns:
-        df[col] = 0 if col != 'linen type' else "Unknown"
 
 if df.empty:
     st.warning("Google Sheet loaded successfully but no tracking rows were found.")
 else:
-    # 3. INTERACTIVE DATA CARDS FOR MULTIPLE STAFF
     st.header("🔄 Live Shift Tracking Status")
     
-    if st.button("🔄 Sync & Refresh Staff Data"):
+    # Force Clear Cache Button to instantly fetch updates
+    if st.button("🔄 Sync & Clear Old Cache"):
         st.cache_data.clear()
         st.rerun()
 
     for idx, row in df.iterrows():
-        # Extracted cleanly using your exact structural keys
-        item_id = row['id']
-        linen_name = row['linen type']
+        # HELPER: Try multiple formatting names to locate your sheet's column
+        item_id = row.get('id', idx + 1)
         
-        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+        # Tries variations of linen name column titles safely
+        linen_name = row.get('linen type', row.get('linentype', row.get('linen_type', 'Unknown Item')))
+        
+        # Ultra-Safe extraction system: Default to 0 instead of crashing if names mismatch
+        val_opening = int(row.get('opening balance', row.get('openingbalance', row.get('opening_balance', 0))))
+        val_in_use = int(row.get('in use', row.get('inuse', row.get('in_use', 0))))
+        val_sent = int(row.get('sent to laundry', row.get('senttolaundry', row.get('sent_to_laundry', 0))))
+        val_received = int(row.get('received from laundry', row.get('receivedfromlaundry', row.get('received_from_laundry', 0))))
+        val_damaged = int(row.get('damaged', 0))
+        val_lost = int(row.get('lost', 0))
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
             st.markdown(f"### **{linen_name}**")
@@ -65,19 +70,19 @@ else:
                 st.caption(f"💬 Note: {row['remarks']}")
                 
         with col2:
-            st.metric("Opening Balance", row['opening balance'])
+            st.metric("Opening Balance", val_opening)
             
         with col3:
-            st.number_input("In Use", min_value=0, value=int(row['in_use']), key=f"use_{idx}")
-            st.number_input("Sent to Laundry", min_value=0, value=int(row['sent to laundry']), key=f"sent_{idx}")
+            st.number_input("In Use", min_value=0, value=val_in_use, key=f"use_{idx}")
+            st.number_input("Sent to Laundry", min_value=0, value=val_sent, key=f"sent_{idx}")
             
         with col4:
-            st.number_input("Received Laundry", min_value=0, value=int(row['received from laundry']), key=f"rec_{idx}")
-            st.metric("Damaged / Lost", f"⚠️ {int(row.get('damaged', 0))} / {int(row.get('lost', 0))}")
+            st.number_input("Received Laundry", min_value=0, value=val_received, key=f"rec_{idx}")
+            st.metric("Damaged / Lost", f"⚠️ {val_damaged} / {val_lost}")
             
         with col5:
-            # Generate QR codes matching physical tags
-            qr_text = f"Linen Log ID: {item_id}\nType: {linen_name}\nOpening Count: {row['opening balance']}"
+            # Generate clean item tracking codes for sorting shelves
+            qr_text = f"Linen Log ID: {item_id}\nType: {linen_name}\nOpening Count: {val_opening}"
             img = qrcode.make(qr_text)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
