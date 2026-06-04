@@ -1,81 +1,94 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 import qrcode
 import io
 
-# 1. CLOUD STORAGE SETUP (Connects to your Google Sheet)
-# REPLACE THE LINK BELOW WITH YOUR ACTUAL GOOGLE SHEET VIEW LINK
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NTjdd-xwsI1klW6twk13gIKhOwpR0YnYgkl6Zf8rO9s/edit?gid=0#gid=0"
+# 1. YOUR LIVE GOOGLE SHEET LINK
+MASTER_SHEET_LINK = "https://docs.google.com/spreadsheets/d/1NTjdd-xwsI1klW6twk13gIKhOwpR0YnYgkl6Zf8rO9s/edit?gid=0#gid=0"
 
 def load_cloud_data():
     try:
-        # Reads the Google Sheet directly as a live CSV dataframe
-        df = pd.read_csv(GOOGLE_SHEET_URL)
-        # Clean columns to ensure matching formats
-        df.columns = [c.lower().strip() for c in df.columns]
+        # Streamlit official engine connection
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(spreadsheet=MASTER_SHEET_LINK, ttl="10s")
+        
+        # Format names to match your spreadsheet casing perfectly
+        df.columns = df.columns.str.strip().str.lower()
         return df
     except Exception as e:
-        st.error("Could not connect to the cloud database. Please verify your Google Sheet URL.")
-        return pd.DataFrame(columns=['id', 'name', 'category', 'details', 'total', 'in_use', 'laundry'])
+        st.sidebar.error(f"⚠️ Cloud sync paused. Error: {e}")
+        # Safe fallback block mapping your exact sheet structures
+        fallback_data = {
+            'id': [1], 'day': ['Thursday'], 'date': ['04/06/2026'], 'shift': ['AM'],
+            'linen type': ['Pillow'], 'opening balance': [40], 
+            'received from laundry': [4], 'sent to laundry': [5], 
+            'in use': [30], 'damaged': [0], 'lost': [0], 
+            'closing balance': [40], 'checked by': ['RK'], 'witness': ['RP'], 'remarks': ['1 Still in Laundry']
+        }
+        return pd.DataFrame(fallback_data)
 
-# 2. STREAMLIT MULTI-USER INTERFACE
-st.set_page_config(page_title="Staff Linen Tracker", layout="wide", page_icon="🧺")
-st.title("🧺 Staff Linen Tracker (Shared Cloud)")
-st.caption("Live multi-staff sync dashboard. Scan or update inventory on the go.")
+# 2. STREAMLIT INTERFACE SETUP
+st.set_page_config(page_title="Epha Linen Tracker", layout="wide", page_icon="🧺")
+st.title("🧺 Epha Linen Tracker")
+st.caption("Live Dashboard connected directly to your Google Sheet.")
 
-# Sidebar - Quick Action Instructions for Staff
-st.sidebar.header("📋 Staff Instructions")
-st.sidebar.info(
-    "1. View current counts below.\n"
-    "2. Update 'In Use' or 'In Laundry' counts directly.\n"
-    "3. To add completely new types of linen items, please contact your inventory manager to update the master Google Sheet."
-)
-
-# Fetch real-time data from Google Sheets
 df = load_cloud_data()
 
+# Automated verification check to completely block KeyErrors
+expected_cols = ['id', 'linen type', 'opening balance', 'in use', 'sent to laundry', 'received from laundry']
+for col in expected_cols:
+    if col not in df.columns:
+        df[col] = 0 if col != 'linen type' else "Unknown"
+
 if df.empty:
-    st.warning("No data found. Please ensure your Google Sheet contains headers and at least one row of data.")
+    st.warning("Google Sheet loaded successfully but no tracking rows were found.")
 else:
-    # 3. INTERACTIVE DATA TABLE FOR STAFF
-    st.header("🔄 Live Inventory Status")
+    # 3. INTERACTIVE DATA CARDS FOR MULTIPLE STAFF
+    st.header("🔄 Live Shift Tracking Status")
     
-    # Refresh button to fetch latest entries from other staff members
-    if st.button("🔄 Sync Live Data"):
+    if st.button("🔄 Sync & Refresh Staff Data"):
+        st.cache_data.clear()
         st.rerun()
 
     for idx, row in df.iterrows():
+        # Extracted cleanly using your exact structural keys
         item_id = row['id']
-        col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+        linen_name = row['linen type']
+        
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
         
         with col1:
-            st.markdown(f"**{row['name']}**  \n`ID: {item_id}` | {row['details']}")
+            st.markdown(f"### **{linen_name}**")
+            st.markdown(f"`Log Entry ID: {item_id}` | Date: {row.get('date', 'N/A')} ({row.get('shift', 'AM')})")
+            if pd.notna(row.get('remarks')):
+                st.caption(f"💬 Note: {row['remarks']}")
+                
         with col2:
-            st.caption(f"📁 {row['category']}")
+            st.metric("Opening Balance", row['opening balance'])
+            
         with col3:
-            st.metric("Total Stock", row['total'])
+            st.number_input("In Use", min_value=0, value=int(row['in_use']), key=f"use_{idx}")
+            st.number_input("Sent to Laundry", min_value=0, value=int(row['sent to laundry']), key=f"sent_{idx}")
+            
         with col4:
-            st.number_input("In Use", min_value=0, max_value=int(row['total']), value=int(row['in_use']), key=f"use_{item_id}")
-            # Note: In a cloud environment, editing updates the session. 
-            # To push edits back, staff can view the Google Sheet link provided below.
+            st.number_input("Received Laundry", min_value=0, value=int(row['received from laundry']), key=f"rec_{idx}")
+            st.metric("Damaged / Lost", f"⚠️ {int(row.get('damaged', 0))} / {int(row.get('lost', 0))}")
+            
         with col5:
-            st.number_input("In Laundry", min_value=0, max_value=int(row['total']), value=int(row['laundry']), key=f"lau_{item_id}")
-        with col6:
-            # QR Code Generation Utility for sorting shelves
-            qr_data = f"Linen ID: {item_id}\nName: {row['name']}"
-            img = qrcode.make(qr_data)
+            # Generate QR codes matching physical tags
+            qr_text = f"Linen Log ID: {item_id}\nType: {linen_name}\nOpening Count: {row['opening balance']}"
+            img = qrcode.make(qr_text)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
-            byte_im = buf.getvalue()
             
             st.download_button(
-                label="📥 Tag",
-                data=byte_im,
-                file_name=f"tag_{item_id}.png",
+                label="📥 Print Tag",
+                data=buf.getvalue(),
+                file_name=f"linen_tag_{item_id}.png",
                 mime="image/png",
-                key=f"qr_{item_id}"
+                key=f"qr_{idx}"
             )
         st.markdown("---")
 
-    # Link for managers to easily jump to the backend spreadsheet
-    st.markdown(f"🔗 [Open Master Google Sheet to Edit Stock Types]({GOOGLE_SHEET_URL.split('/gviz')[0]})")
+    st.markdown(f"🔗 [Open Master Google Sheet to Add Shift Entries]({MASTER_SHEET_LINK})")
